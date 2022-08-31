@@ -76,6 +76,7 @@ use (
 	./v4/server/grpc
 	./v4/server/http
 	./v4/server/mucp
+	./v4/store/aws/qldb
 	./v4/store/cockroach
 	./v4/store/consul
 	./v4/store/file
