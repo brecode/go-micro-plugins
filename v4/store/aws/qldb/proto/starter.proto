@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+option go_package = "./proto;starter";
+
+service QLDB {
+	rpc Write(Record) returns (google.protobuf.Empty) {}
+	rpc Read(Id) returns (Record) {}
+}
+
+message Record {
+	string testFieldOne = 1;
+	string testFieldTwo = 2;
+	int32 testFieldThree = 3;
+}
+
+message Id {
+	string key = 2;
+}

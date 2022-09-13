@@ -2,17 +2,20 @@
 package qldb
 
 import (
-	"github.com/aws/aws-sdk-go-v2/config"
+	"context"
+	"fmt"
 	"regexp"
-	"sync"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/qldbsession"
+	"github.com/golang/protobuf/proto"
+
+	"github.com/amzn/ion-go/ion"
+
+	"github.com/aws/aws-sdk-go-v2/config"
+
+	"github.com/aws/aws-sdk-go-v2/service/qldbsession"
 	"github.com/awslabs/amazon-qldb-driver-go/v3/qldbdriver"
-
+	qldbpb "github.com/go-micro/plugins/v4/store/aws/qldb/proto"
 	"go-micro.dev/v4/logger"
-
 	"go-micro.dev/v4/store"
 	"go-micro.dev/v4/util/cmd"
 )
@@ -20,8 +23,8 @@ import (
 // DefaultJournal is the journal that qldb
 // will use if no other journal name is provided.
 var (
-	DefaultLedger = "amber"
-	DefaultTable  = "user-data"
+	DefaultLedger = "qldb-test"
+	DefaultTable  = "Person"
 )
 
 var (
@@ -39,37 +42,20 @@ var (
 
 type QLDB struct {
 	options store.Options
-	session *qldbsession.QLDBSession
+	session *qldbsession.Client
 	driver  *qldbdriver.QLDBDriver
-
-	sync.RWMutex
-	// known databases
-	databases map[string]bool
 }
 
 func init() {
 	cmd.DefaultStores["qldb"] = NewStore
 }
 
-func (q *QLDB) Init(option ...store.Option) error {
-	var err error
-	awsSession := session.Must(session.NewSession(aws.NewConfig().WithRegion("us-east-1")))
-	q.session = qldbsession.New(awsSession)
-
-	cfg, err := config.LoadDefaultConfig(context.TODO())
-	if err != nil {
-		return err
+func (q *QLDB) Init(opts ...store.Option) error {
+	for _, o := range opts {
+		o(&q.options)
 	}
 
-	qldbSession := qldbsession.NewFromConfig(cfg, func(options *qldbsession.Options) {
-		options.Region = "us-east-1"}
-
-	q.driver, err = qldbdriver.New("quick-start",
-		q.session,
-		func(options *qldbdriver.DriverOptions) {
-			options.LoggerVerbosity = qldbdriver.LogInfo
-		}))
-	return err
+	return q.configure()
 }
 
 func (q *QLDB) Options() store.Options {
@@ -78,13 +64,63 @@ func (q *QLDB) Options() store.Options {
 }
 
 func (q *QLDB) Read(key string, opts ...store.ReadOption) ([]*store.Record, error) {
-	//TODO implement me
-	panic("implement me")
+
+	p, err := q.driver.Execute(context.Background(), func(txn qldbdriver.Transaction) (interface{}, error) {
+		result, err := txn.Execute("SELECT * FROM Person WHERE TestFieldOne = ?", key)
+		if err != nil {
+			return nil, err
+		}
+
+		// Assume the result is not empty
+		hasNext := result.Next(txn)
+		if !hasNext && result.Err() != nil {
+			return nil, result.Err()
+		}
+
+		ionBinary := result.GetCurrentData()
+
+		temp := &qldbpb.Record{}
+		err = ion.Unmarshal(ionBinary, temp)
+		if err != nil {
+			return nil, err
+		}
+
+		return temp, nil
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	b, _ := proto.Marshal(p.(*qldbpb.Record))
+	arr := []*store.Record{
+		{
+			Value: b,
+		},
+	}
+
+	return arr, nil
 }
 
 func (q *QLDB) Write(r *store.Record, opts ...store.WriteOption) error {
-	//TODO implement me
-	panic("implement me")
+
+	stmt := fmt.Sprintf("INSERT INTO %s ?", r.Key)
+
+	temp := &qldbpb.Record{}
+	err := proto.Unmarshal(r.Value, temp)
+
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = q.driver.Execute(context.Background(), func(txn qldbdriver.Transaction) (interface{}, error) {
+		return txn.Execute(stmt, temp)
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	return nil
+
 }
 
 func (q *QLDB) Delete(key string, opts ...store.DeleteOption) error {
@@ -98,8 +134,8 @@ func (q *QLDB) List(opts ...store.ListOption) ([]string, error) {
 }
 
 func (q *QLDB) Close() error {
-	//TODO implement me
-	panic("implement me")
+	q.driver.Shutdown(context.TODO())
+	return nil
 }
 
 func (q *QLDB) String() string {
@@ -110,7 +146,7 @@ func (q *QLDB) String() string {
 // NewStore returns a new Store backed by qldb
 func NewStore(opts ...store.Option) store.Store {
 	options := store.Options{
-		Database: DefaultDatabase,
+		Database: DefaultLedger,
 		Table:    DefaultTable,
 	}
 
@@ -122,8 +158,7 @@ func NewStore(opts ...store.Option) store.Store {
 	s := new(QLDB)
 	// set the options
 	s.options = options
-	// mark known databases
-	s.databases = make(map[string]bool)
+
 	// best-effort configure the store
 	if err := s.configure(); err != nil {
 		if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
@@ -133,4 +168,28 @@ func NewStore(opts ...store.Option) store.Store {
 
 	// return store
 	return s
+}
+
+func (q *QLDB) configure() error {
+
+	cfg, err := config.LoadDefaultConfig(context.TODO())
+	if err != nil {
+		return err
+	}
+
+	q.session = qldbsession.NewFromConfig(cfg, func(options *qldbsession.Options) {
+		options.Region = "us-west-2"
+	})
+
+	if q.driver != nil {
+		q.driver.Shutdown(context.TODO())
+	}
+
+	q.driver, err = qldbdriver.New(DefaultLedger,
+		q.session,
+		func(options *qldbdriver.DriverOptions) {
+			options.LoggerVerbosity = qldbdriver.LogInfo
+		})
+
+	return err
 }
