@@ -3,6 +3,7 @@ go 1.18
 use (
 	./v4/acme/certmagic
 	./v4/auth/jwt
+	./v4/broker/confluentcloud
 	./v4/broker/gocloud
 	./v4/broker/googlepubsub
 	./v4/broker/grpc
