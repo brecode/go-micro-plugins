@@ -6,7 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/qldbsession"
 	"github.com/awslabs/amazon-qldb-driver-go/v3/qldbdriver"
 	"go-micro.dev/v4/logger"
@@ -14,19 +15,21 @@ import (
 	"go-micro.dev/v4/util/cmd"
 )
 
-// DefaultDatabase is the journal that qldb
-// will use if no other journal name is provided.
-const (
-	DefaultDatabase = "micro"
-	DefaultTable    = "micro"
-)
+type Config struct {
+	APIKey     string
+	APISecret  string
+	Region     string
+	MaxRetries int
+}
 
 type QLDB struct {
 	options store.Options
 
-	session  *qldbsession.Client
-	driver   *qldbdriver.QLDBDriver
-	indexKey string
+	session *qldbsession.Client
+	driver  *qldbdriver.QLDBDriver
+	qldbdriver.QLDBDriver
+
+	cfg *Config
 }
 
 func init() {
@@ -42,8 +45,7 @@ func (q *QLDB) Options() store.Options {
 }
 
 func (q *QLDB) Read(key string, opts ...store.ReadOption) ([]*store.Record, error) {
-	// apply readOptions for Prefix and Suffix
-	// todo - check if applies to QLDB
+
 	var options store.ReadOptions
 	var records []*store.Record
 
@@ -51,7 +53,7 @@ func (q *QLDB) Read(key string, opts ...store.ReadOption) ([]*store.Record, erro
 		o(&options)
 	}
 
-	st := fmt.Sprintf("SELECT * FROM %s WHERE %s = ?", q.options.Table, q.indexKey)
+	st := fmt.Sprintf("SELECT * FROM %s WHERE %s = ?", q.options.Table, key)
 	r, err := q.driver.Execute(context.Background(), func(txn qldbdriver.Transaction) (interface{}, error) {
 		result, err := txn.Execute(st, key)
 		if err != nil {
@@ -67,7 +69,6 @@ func (q *QLDB) Read(key string, opts ...store.ReadOption) ([]*store.Record, erro
 			records = append(records, v)
 		}
 		if result.Err() != nil {
-			fmt.Println(result.Err())
 			return nil, result.Err()
 		}
 
@@ -84,7 +85,7 @@ func (q *QLDB) Write(r *store.Record, opts ...store.WriteOption) error {
 
 	// statements for transactions
 	stmt := fmt.Sprintf("INSERT INTO %s ?", q.options.Table)
-	idempotentStmt := fmt.Sprintf("SELECT * FROM %s WHERE %s = ?", q.options.Table, q.indexKey)
+	idempotentStmt := fmt.Sprintf("SELECT * FROM %s WHERE %s = ?", q.options.Table, r.Key)
 
 	_, err := q.driver.Execute(context.Background(), func(txn qldbdriver.Transaction) (interface{}, error) {
 
@@ -141,22 +142,22 @@ func (q *QLDB) String() string {
 
 // NewStore returns a new Store backed by qldb
 func NewStore(opts ...store.Option) store.Store {
-	options := store.Options{
-		Database: DefaultDatabase,
-		Table:    DefaultTable,
-	}
+	options := &store.Options{}
 
 	for _, o := range opts {
-		o(&options)
+		o(options)
 	}
 
-	ik, _ := options.Context.Value(struct{}{}).(string)
+	// get index key for optimized reads
+	cfg, _ := options.Context.Value(struct{}{}).(*Config)
+	logger.Log(logger.DebugLevel, "QLDB config: %v", cfg)
 
 	// new store
 	s := new(QLDB)
 	// set the options
-	s.options = options
-	s.indexKey = ik
+	s.options = *options
+	s.cfg = cfg
+
 	// best-effort configure the store
 	if err := s.configure(); err != nil {
 		if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
@@ -169,13 +170,14 @@ func NewStore(opts ...store.Option) store.Store {
 }
 
 func (q *QLDB) configure() error {
+	var err error
 
-	if q.indexKey == "" {
-		return errors.New("no index key found")
-	}
-	cfg, err := config.LoadDefaultConfig(context.TODO())
-	if err != nil {
-		return err
+	cfg := aws.Config{
+		Region: q.cfg.Region,
+		Credentials: credentials.NewStaticCredentialsProvider(
+			q.cfg.APIKey,
+			q.cfg.APISecret,
+			""),
 	}
 
 	q.session = qldbsession.NewFromConfig(cfg, func(options *qldbsession.Options) {})

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"go-micro.dev/v4/broker"
+	"go-micro.dev/v4/logger"
 	"go-micro.dev/v4/util/cmd"
 	"strconv"
 	"time"
@@ -34,7 +35,7 @@ func NewBroker(opts ...broker.Option) broker.Broker {
 
 	c := new(Confluent)
 	if kafkaCfg, ok := options.Context.Value(struct{}{}).(*kafka.ConfigMap); ok {
-		fmt.Printf("%v", kafkaCfg)
+		logger.Log(logger.DebugLevel, "kafka config: %v", kafkaCfg)
 		c.cfg = kafkaCfg
 	}
 
@@ -126,6 +127,7 @@ func (c *Confluent) Subscribe(topic string, h broker.Handler, opts ...broker.Sub
 			default:
 				ev, err := c.consumer.ReadMessage(100 * time.Millisecond)
 				if err != nil {
+					logger.Log(logger.ErrorLevel, err)
 					continue
 				}
 
@@ -144,7 +146,7 @@ func (c *Confluent) Subscribe(topic string, h broker.Handler, opts ...broker.Sub
 					topic: *ev.TopicPartition.Topic,
 				}
 				if err := h(p); err != nil {
-					fmt.Println(err)
+					logger.Log(logger.ErrorLevel, err)
 					continue
 				}
 			}
