@@ -145,9 +145,12 @@ func (c *Confluent) Subscribe(topic string, h broker.Handler, opts ...broker.Sub
 					},
 					topic: *ev.TopicPartition.Topic,
 				}
-				if err := h(p); err != nil {
-					logger.Log(logger.ErrorLevel, err)
-					continue
+				err = h(p)
+				if err != nil {
+					// ack to msg bus
+					p.Ack()
+				} else {
+					// return msg to msg bus
 				}
 			}
 		}
