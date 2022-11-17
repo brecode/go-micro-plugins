@@ -18,38 +18,36 @@ type testcase struct {
 	Assert func(req *http.Request) bool
 }
 
-type assertFn func(req *http.Request) bool
-
 var tests = []testcase{
-	testcase{
+	{
 		ReqFn: func(opts *Options) *Request {
 			return NewRequest(opts).Get().Resource("services")
 		},
 		Method: "GET",
 		URI:    "/api/v1/namespaces/default/services/",
 	},
-	testcase{
+	{
 		ReqFn: func(opts *Options) *Request {
 			return NewRequest(opts).Get().Resource("services").Name("foo")
 		},
 		Method: "GET",
 		URI:    "/api/v1/namespaces/default/services/foo",
 	},
-	testcase{
+	{
 		ReqFn: func(opts *Options) *Request {
 			return NewRequest(opts).Get().Resource("services").Namespace("test").Name("bar")
 		},
 		Method: "GET",
 		URI:    "/api/v1/namespaces/test/services/bar",
 	},
-	testcase{
+	{
 		ReqFn: func(opts *Options) *Request {
 			return NewRequest(opts).Get().Resource("pods").Params(&Params{LabelSelector: map[string]string{"foo": "bar"}})
 		},
 		Method: "GET",
 		URI:    "/api/v1/namespaces/default/pods/?labelSelector=foo%3Dbar",
 	},
-	testcase{
+	{
 		ReqFn: func(opts *Options) *Request {
 			return NewRequest(opts).Post().Resource("services").Name("foo").Body(map[string]string{"foo": "bar"})
 		},
@@ -57,7 +55,7 @@ var tests = []testcase{
 		URI:    "/api/v1/namespaces/default/services/foo",
 		Body:   map[string]string{"foo": "bar"},
 	},
-	testcase{
+	{
 		ReqFn: func(opts *Options) *Request {
 			return NewRequest(opts).Put().Resource("endpoints").Name("baz").Body(map[string]string{"bam": "bar"})
 		},
@@ -65,7 +63,7 @@ var tests = []testcase{
 		URI:    "/api/v1/namespaces/default/endpoints/baz",
 		Body:   map[string]string{"bam": "bar"},
 	},
-	testcase{
+	{
 		ReqFn: func(opts *Options) *Request {
 			return NewRequest(opts).Patch().Resource("endpoints").Name("baz").Body(map[string]string{"bam": "bar"})
 		},
@@ -73,7 +71,7 @@ var tests = []testcase{
 		URI:    "/api/v1/namespaces/default/endpoints/baz",
 		Body:   map[string]string{"bam": "bar"},
 	},
-	testcase{
+	{
 		ReqFn: func(opts *Options) *Request {
 			return NewRequest(opts).Patch().Resource("endpoints").Name("baz").SetHeader("foo", "bar")
 		},
@@ -83,7 +81,9 @@ var tests = []testcase{
 	},
 }
 
-var wrappedHandler = func(test *testcase, t *testing.T) http.HandlerFunc {
+var wrappedHandler = func(t *testing.T, test *testcase) http.HandlerFunc {
+	t.Helper()
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
 		if len(test.Token) > 0 && (len(auth) == 0 || auth != "Bearer "+test.Token) {
@@ -100,10 +100,13 @@ var wrappedHandler = func(test *testcase, t *testing.T) http.HandlerFunc {
 
 		if test.Body != nil {
 			var res map[string]string
+
 			decoder := json.NewDecoder(r.Body)
+
 			if err := decoder.Decode(&res); err != nil {
 				t.Errorf("decoding body failed: %v", err)
 			}
+
 			if !reflect.DeepEqual(res, test.Body) {
 				t.Error("body did not match")
 			}
@@ -122,15 +125,16 @@ var wrappedHandler = func(test *testcase, t *testing.T) http.HandlerFunc {
 }
 
 func TestRequest(t *testing.T) {
-
 	for _, test := range tests {
-		ts := httptest.NewServer(wrappedHandler(&test, t))
+		ts := httptest.NewServer(wrappedHandler(t, &test))
+
 		req := test.ReqFn(&Options{
 			Host:        ts.URL,
 			Client:      &http.Client{},
 			BearerToken: &test.Token,
 			Namespace:   "default",
 		})
+
 		res := req.Do()
 		if res.Error() != nil {
 			t.Errorf("Did not expect to fail with %v", res.Error())

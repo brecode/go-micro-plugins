@@ -21,12 +21,13 @@ const (
 )
 
 // NewStream returns an initialized nats stream or an error if the connection to the nats
-// server could not be established
+// server could not be established.
 func NewStream(opts ...Option) (events.Stream, error) {
 	// parse the options
 	options := Options{
 		ClientID:  uuid.New().String(),
 		ClusterID: defaultClusterID,
+		Logger:    logger.DefaultLogger,
 	}
 	for _, o := range opts {
 		o(&options)
@@ -95,11 +96,10 @@ func (s *stream) connectionLost(conn stan.Conn, err error) {
 			s.status = statusConnected
 			return
 		}
-
 	}()
 }
 
-// Publish a message to a topic
+// Publish a message to a topic.
 func (s *stream) Publish(topic string, msg interface{}, opts ...events.PublishOption) error {
 	// validate the topic
 	if len(topic) == 0 {
@@ -149,12 +149,14 @@ func (s *stream) Publish(topic string, msg interface{}, opts ...events.PublishOp
 	return nil
 }
 
-// Consume to a topic
+// Consume to a topic.
 func (s *stream) Consume(topic string, opts ...events.ConsumeOption) (<-chan events.Event, error) {
 	// validate the topic
 	if len(topic) == 0 {
 		return nil, events.ErrMissingTopic
 	}
+
+	log := s.opts.Logger
 
 	// parse the options
 	options := events.ConsumeOptions{
@@ -170,9 +172,7 @@ func (s *stream) Consume(topic string, opts ...events.ConsumeOption) (<-chan eve
 	handleMsg := func(m *stan.Msg) {
 		// poison message handling
 		if options.GetRetryLimit() > -1 && m.Redelivered && int(m.RedeliveryCount) > options.GetRetryLimit() {
-			if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
-				logger.Errorf("Message retry limit reached, discarding: %v", m.Sequence)
-			}
+			log.Logf(logger.ErrorLevel, "Message retry limit reached, discarding: %v", m.Sequence)
 			m.Ack() // ignoring error
 			return
 		}
@@ -180,9 +180,7 @@ func (s *stream) Consume(topic string, opts ...events.ConsumeOption) (<-chan eve
 		// decode the message
 		var evt events.Event
 		if err := json.Unmarshal(m.Data, &evt); err != nil {
-			if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
-				logger.Errorf("Error decoding message: %v", err)
-			}
+			log.Logf(logger.ErrorLevel, "Error decoding message: %v", err)
 			// not acknowledging the message is the way to indicate an error occurred
 			return
 		}
@@ -205,8 +203,8 @@ func (s *stream) Consume(topic string, opts ...events.ConsumeOption) (<-chan eve
 		if !options.AutoAck {
 			return
 		}
-		if err := m.Ack(); err != nil && logger.V(logger.ErrorLevel, logger.DefaultLogger) {
-			logger.Errorf("Error acknowledging message: %v", err)
+		if err := m.Ack(); err != nil {
+			log.Logf(logger.ErrorLevel, "Error acknowledging message: %v", err)
 		}
 	}
 

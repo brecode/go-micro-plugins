@@ -3,16 +3,18 @@ package kubernetes
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"regexp"
 	"strings"
 	"time"
 
-	"github.com/go-micro/plugins/v4/registry/kubernetes/client"
 	"go-micro.dev/v4/registry"
 	"go-micro.dev/v4/util/cmd"
+
+	"github.com/pkg/errors"
+
+	"github.com/go-micro/plugins/v4/registry/kubernetes/client"
 )
 
 type kregistry struct {
@@ -30,18 +32,24 @@ var (
 	labelTypeKey          = "micro.mu/type"
 	labelTypeValueService = "service"
 
-	// used on k8s services to scope a serialised
-	// micro service by pod name
+	// used on k8s services to scope a serialized
+	// micro service by pod name.
 	annotationServiceKeyPrefix = "micro.mu/service-"
 
-	// Pod status
+	// Pod status.
 	podRunning = "Running"
 
-	// label name regex
+	// label name regex.
 	labelRe = regexp.MustCompilePOSIX("[-A-Za-z0-9_.]")
 )
 
-// podSelector
+// Err are all package errors.
+var (
+	ErrNoHostname   = errors.New("failed to get podname from HOSTNAME variable")
+	ErrNoNodesFound = errors.New("you must provide at least one node")
+)
+
+// podSelector.
 var podSelector = map[string]string{
 	labelTypeKey: labelTypeValueService,
 }
@@ -79,7 +87,7 @@ func configure(k *kregistry, opts ...registry.Option) error {
 	return nil
 }
 
-// serviceName generates a valid service name for k8s labels
+// serviceName generates a valid service name for k8s labels.
 func serviceName(name string) string {
 	aname := make([]byte, len(name))
 
@@ -88,38 +96,44 @@ func serviceName(name string) string {
 			aname[i] = '_'
 			continue
 		}
+
 		aname[i] = r
 	}
 
 	return string(aname)
 }
 
-// Init allows reconfig of options
+// Init allows reconfig of options.
 func (c *kregistry) Init(opts ...registry.Option) error {
 	return configure(c, opts...)
 }
 
-// Options returns the registry Options
+// Options returns the registry Options.
 func (c *kregistry) Options() registry.Options {
 	return c.options
 }
 
 // Register sets a service selector label and an annotation with a
-// serialised version of the service passed in.
+// serialized version of the service passed in.
 func (c *kregistry) Register(s *registry.Service, opts ...registry.RegisterOption) error {
 	if len(s.Nodes) == 0 {
-		return errors.New("you must register at least one node")
+		return ErrNoNodesFound
 	}
 
-	// TODO: grab podname from somewhere better than this.
-	podName := os.Getenv("HOSTNAME")
 	svcName := s.Name
+
+	// TODO: grab podname from somewhere better than this.
+	podName, err := getPodName()
+	if err != nil {
+		return errors.Wrap(err, "failed to register")
+	}
 
 	// encode micro service
 	b, err := json.Marshal(s)
 	if err != nil {
 		return err
 	}
+
 	svc := string(b)
 
 	pod := &client.Pod{
@@ -141,15 +155,19 @@ func (c *kregistry) Register(s *registry.Service, opts ...registry.RegisterOptio
 	return nil
 }
 
-// Deregister nils out any things set in Register
+// Deregister nils out any things set in Register.
 func (c *kregistry) Deregister(s *registry.Service, opts ...registry.DeregisterOption) error {
 	if len(s.Nodes) == 0 {
-		return errors.New("you must deregister at least one node")
+		return ErrNoNodesFound
 	}
 
-	// TODO: grab podname from somewhere better than this.
-	podName := os.Getenv("HOSTNAME")
 	svcName := s.Name
+
+	// TODO: grab podname from somewhere better than env var.
+	podName, err := getPodName()
+	if err != nil {
+		return errors.Wrap(err, "failed to deregister")
+	}
 
 	pod := &client.Pod{
 		Metadata: &client.Meta{
@@ -167,7 +185,6 @@ func (c *kregistry) Deregister(s *registry.Service, opts ...registry.DeregisterO
 	}
 
 	return nil
-
 }
 
 // GetService will get all the pods with the given service selector,
@@ -192,14 +209,15 @@ func (c *kregistry) GetService(name string, opts ...registry.GetOption) ([]*regi
 		if pod.Status.Phase != podRunning || pod.Metadata.DeletionTimestamp != "" {
 			continue
 		}
-		// get serialised service from annotation
+		// get serialized service from annotation
 		svcStr, ok := pod.Metadata.Annotations[annotationServiceKeyPrefix+serviceName(name)]
 		if !ok {
 			continue
 		}
 
-		// unmarshal service string
 		var svc registry.Service
+
+		// unmarshal service string
 		err := json.Unmarshal([]byte(*svcStr), &svc)
 		if err != nil {
 			return nil, fmt.Errorf("could not unmarshal service '%s' from pod annotation", name)
@@ -219,10 +237,11 @@ func (c *kregistry) GetService(name string, opts ...registry.GetOption) ([]*regi
 	for _, val := range svcs {
 		list = append(list, val)
 	}
+
 	return list, nil
 }
 
-// ListServices will list all the service names
+// ListServices will list all the service names.
 func (c *kregistry) ListServices(opts ...registry.ListOption) ([]*registry.Service, error) {
 	pods, err := c.client.ListPods(podSelector)
 	if err != nil {
@@ -236,6 +255,7 @@ func (c *kregistry) ListServices(opts ...registry.ListOption) ([]*registry.Servi
 		if pod.Status.Phase != podRunning || pod.Metadata.DeletionTimestamp != "" {
 			continue
 		}
+
 		for k, v := range pod.Metadata.Annotations {
 			if !strings.HasPrefix(k, annotationServiceKeyPrefix) {
 				continue
@@ -247,23 +267,30 @@ func (c *kregistry) ListServices(opts ...registry.ListOption) ([]*registry.Servi
 			if err := json.Unmarshal([]byte(*v), &svc); err != nil {
 				continue
 			}
+
 			s, ok := svcs[svc.Name+svc.Version]
 			if !ok {
 				svcs[svc.Name+svc.Version] = &svc
 				continue
 			}
+
 			// append to service:version nodes
 			s.Nodes = append(s.Nodes, svc.Nodes...)
 		}
 	}
-	var list []*registry.Service
+
+	i := 0
+	list := make([]*registry.Service, len(svcs))
+
 	for _, s := range svcs {
-		list = append(list, s)
+		list[i] = s
+		i++
 	}
+
 	return list, nil
 }
 
-// Watch returns a kubernetes watcher
+// Watch returns a kubernetes watcher.
 func (c *kregistry) Watch(opts ...registry.WatchOption) (registry.Watcher, error) {
 	return newWatcher(c, opts...)
 }
@@ -272,11 +299,23 @@ func (c *kregistry) String() string {
 	return "kubernetes"
 }
 
-// NewRegistry creates a kubernetes registry
+// NewRegistry creates a kubernetes registry.
 func NewRegistry(opts ...registry.Option) registry.Registry {
 	k := &kregistry{
 		options: registry.Options{},
 	}
+
+	//nolint:errcheck,gosec
 	configure(k, opts...)
+
 	return k
+}
+
+func getPodName() (string, error) {
+	podName := os.Getenv("HOSTNAME")
+	if len(podName) == 0 {
+		return "", ErrNoHostname
+	}
+
+	return podName, nil
 }

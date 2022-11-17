@@ -20,12 +20,13 @@ const (
 )
 
 // NewStream returns an initialized nats stream or an error if the connection to the nats
-// server could not be established
+// server could not be established.
 func NewStream(opts ...Option) (events.Stream, error) {
 	// parse the options
 	options := Options{
 		ClientID:  uuid.New().String(),
 		ClusterID: defaultClusterID,
+		Logger:    logger.DefaultLogger,
 	}
 	for _, o := range opts {
 		o(&options)
@@ -68,7 +69,7 @@ func connectToNatsJetStream(options Options) (nats.JetStreamContext, error) {
 	return js, nil
 }
 
-// Publish a message to a topic
+// Publish a message to a topic.
 func (s *stream) Publish(topic string, msg interface{}, opts ...events.PublishOption) error {
 	// validate the topic
 	if len(topic) == 0 {
@@ -118,12 +119,14 @@ func (s *stream) Publish(topic string, msg interface{}, opts ...events.PublishOp
 	return nil
 }
 
-// Consume from a topic
+// Consume from a topic.
 func (s *stream) Consume(topic string, opts ...events.ConsumeOption) (<-chan events.Event, error) {
 	// validate the topic
 	if len(topic) == 0 {
 		return nil, events.ErrMissingTopic
 	}
+
+	log := s.opts.Logger
 
 	// parse the options
 	options := events.ConsumeOptions{
@@ -136,16 +139,13 @@ func (s *stream) Consume(topic string, opts ...events.ConsumeOption) (<-chan eve
 	// setup the subscriber
 	c := make(chan events.Event)
 	handleMsg := func(m *nats.Msg) {
-
 		ctx, cancel := context.WithCancel(context.TODO())
 		defer cancel()
 
 		// decode the message
 		var evt events.Event
 		if err := json.Unmarshal(m.Data, &evt); err != nil {
-			if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
-				logger.Errorf("Error decoding message: %v", err)
-			}
+			log.Logf(logger.ErrorLevel, "Error decoding message: %v", err)
 			// not acknowledging the message is the way to indicate an error occurred
 			return
 		}
@@ -166,9 +166,10 @@ func (s *stream) Consume(topic string, opts ...events.ConsumeOption) (<-chan eve
 		if !options.AutoAck {
 			return
 		}
-		if err := m.Ack(nats.Context(ctx)); err != nil && logger.V(logger.ErrorLevel, logger.DefaultLogger) {
-			logger.Errorf("Error acknowledging message: %v", err)
+		if err := m.Ack(nats.Context(ctx)); err != nil {
+			log.Logf(logger.ErrorLevel, "Error acknowledging message: %v", err)
 		}
+
 	}
 
 	// ensure that a stream exists for that topic

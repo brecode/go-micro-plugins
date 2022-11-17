@@ -23,10 +23,11 @@ var (
 	DefaultPrefetchCount  = 0
 	DefaultPrefetchGlobal = false
 	DefaultRequeueOnError = false
+	DefaultConfirmPublish = false
 
 	// The amqp library does not seem to set these when using amqp.DialConfig
 	// (even though it says so in the comments) so we set them manually to make
-	// sure to not brake any existing functionality
+	// sure to not brake any existing functionality.
 	defaultHeartbeat = 10 * time.Second
 	defaultLocale    = "en_US"
 
@@ -48,15 +49,18 @@ type rabbitMQConn struct {
 	url             string
 	prefetchCount   int
 	prefetchGlobal  bool
+	confirmPublish  bool
 
 	sync.Mutex
 	connected bool
 	close     chan bool
 
 	waitConnection chan struct{}
+
+	logger logger.Logger
 }
 
-// Exchange is the rabbitmq exchange
+// Exchange is the rabbitmq exchange.
 type Exchange struct {
 	// Name of the exchange
 	Name string
@@ -64,7 +68,7 @@ type Exchange struct {
 	Durable bool
 }
 
-func newRabbitMQConn(ex Exchange, urls []string, prefetchCount int, prefetchGlobal bool) *rabbitMQConn {
+func newRabbitMQConn(ex Exchange, urls []string, prefetchCount int, prefetchGlobal bool, confirmPublish bool, logger logger.Logger) *rabbitMQConn {
 	var url string
 
 	if len(urls) > 0 && regexp.MustCompile("^amqp(s)?://.*").MatchString(urls[0]) {
@@ -78,8 +82,10 @@ func newRabbitMQConn(ex Exchange, urls []string, prefetchCount int, prefetchGlob
 		url:            url,
 		prefetchCount:  prefetchCount,
 		prefetchGlobal: prefetchGlobal,
+		confirmPublish: confirmPublish,
 		close:          make(chan bool),
 		waitConnection: make(chan struct{}),
+		logger:         logger,
 	}
 	// its bad case of nil == waitConnection, so close it at start
 	close(ret.waitConnection)
@@ -118,7 +124,7 @@ func (r *rabbitMQConn) reconnect(secure bool, config *amqp.Config) {
 			r.Lock()
 			r.connected = true
 			r.Unlock()
-			//unblock resubscribe cycle - close channel
+			// unblock resubscribe cycle - close channel
 			//at this point channel is created and unclosed - close it without any additional checks
 			close(r.waitConnection)
 		}
@@ -134,9 +140,7 @@ func (r *rabbitMQConn) reconnect(secure bool, config *amqp.Config) {
 			// block until closed
 			select {
 			case err := <-chanNotifyClose:
-				if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
-					logger.Error(err)
-				}
+				r.logger.Log(logger.ErrorLevel, err)
 				// block all resubscribe attempt - they are useless because there is no connection to rabbitmq
 				// create channel 'waitConnection' (at this point channel is nil or closed, create it without unnecessary checks)
 				r.Lock()
@@ -145,9 +149,7 @@ func (r *rabbitMQConn) reconnect(secure bool, config *amqp.Config) {
 				r.Unlock()
 				chanNotifyClose = nil
 			case err := <-notifyClose:
-				if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
-					logger.Error(err)
-				}
+				r.logger.Log(logger.ErrorLevel, err)
 				// block all resubscribe attempt - they are useless because there is no connection to rabbitmq
 				// create channel 'waitConnection' (at this point channel is nil or closed, create it without unnecessary checks)
 				r.Lock()
@@ -225,7 +227,7 @@ func (r *rabbitMQConn) tryConnect(secure bool, config *amqp.Config) error {
 		return err
 	}
 
-	if r.Channel, err = newRabbitChannel(r.Connection, r.prefetchCount, r.prefetchGlobal); err != nil {
+	if r.Channel, err = newRabbitChannel(r.Connection, r.prefetchCount, r.prefetchGlobal, r.confirmPublish); err != nil {
 		return err
 	}
 
@@ -234,13 +236,13 @@ func (r *rabbitMQConn) tryConnect(secure bool, config *amqp.Config) error {
 	} else {
 		r.Channel.DeclareExchange(r.exchange.Name)
 	}
-	r.ExchangeChannel, err = newRabbitChannel(r.Connection, r.prefetchCount, r.prefetchGlobal)
+	r.ExchangeChannel, err = newRabbitChannel(r.Connection, r.prefetchCount, r.prefetchGlobal, r.confirmPublish)
 
 	return err
 }
 
 func (r *rabbitMQConn) Consume(queue, key string, headers amqp.Table, qArgs amqp.Table, autoAck, durableQueue bool) (*rabbitMQChannel, <-chan amqp.Delivery, error) {
-	consumerChannel, err := newRabbitChannel(r.Connection, r.prefetchCount, r.prefetchGlobal)
+	consumerChannel, err := newRabbitChannel(r.Connection, r.prefetchCount, r.prefetchGlobal, r.confirmPublish)
 	if err != nil {
 		return nil, nil, err
 	}

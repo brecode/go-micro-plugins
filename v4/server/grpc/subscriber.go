@@ -168,13 +168,10 @@ func validateSubscriber(sub server.Subscriber) error {
 
 func (g *grpcServer) createSubHandler(sb *subscriber, opts server.Options) broker.Handler {
 	return func(p broker.Event) (err error) {
-
 		defer func() {
 			if r := recover(); r != nil {
-				if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
-					logger.Error("panic recovered: ", r)
-					logger.Error(string(debug.Stack()))
-				}
+				g.opts.Logger.Log(logger.ErrorLevel, "panic recovered: ", r)
+				g.opts.Logger.Log(logger.ErrorLevel, string(debug.Stack()))
 				err = errors.InternalServerError("go.micro.server", "panic recovered: %v", r)
 			}
 		}()

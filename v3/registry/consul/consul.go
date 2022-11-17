@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -177,6 +178,8 @@ func (c *consulRegistry) Register(s *registry.Service, opts ...registry.Register
 
 	var regTCPCheck bool
 	var regInterval time.Duration
+	var regHTTPCheck bool
+	var httpCheckConfig consul.AgentServiceCheck
 
 	var options registry.RegisterOptions
 	for _, o := range opts {
@@ -187,6 +190,10 @@ func (c *consulRegistry) Register(s *registry.Service, opts ...registry.Register
 		if tcpCheckInterval, ok := c.opts.Context.Value("consul_tcp_check").(time.Duration); ok {
 			regTCPCheck = true
 			regInterval = tcpCheckInterval
+		}
+		var ok bool
+		if httpCheckConfig, ok = c.opts.Context.Value("consul_http_check_config").(consul.AgentServiceCheck); ok {
+			regHTTPCheck = true
 		}
 	}
 
@@ -242,6 +249,20 @@ func (c *consulRegistry) Register(s *registry.Service, opts ...registry.Register
 		check = &consul.AgentServiceCheck{
 			TCP:                            node.Address,
 			Interval:                       fmt.Sprintf("%v", regInterval),
+			DeregisterCriticalServiceAfter: fmt.Sprintf("%v", deregTTL),
+		}
+
+	} else if regHTTPCheck {
+		interval, _ := time.ParseDuration(httpCheckConfig.Interval)
+		deregTTL := getDeregisterTTL(interval)
+
+		host, _, _ := net.SplitHostPort(node.Address)
+		healthCheckURI := strings.Replace(httpCheckConfig.HTTP, "{host}", host, 1)
+
+		check = &consul.AgentServiceCheck{
+			HTTP:                           healthCheckURI,
+			Interval:                       httpCheckConfig.Interval,
+			Timeout:                        httpCheckConfig.Timeout,
 			DeregisterCriticalServiceAfter: fmt.Sprintf("%v", deregTTL),
 		}
 

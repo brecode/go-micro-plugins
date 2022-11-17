@@ -40,7 +40,7 @@ func init() {
 	encoding.RegisterCodec(wrapCodec{bytesCodec{}})
 }
 
-// secure returns the dial option for whether its a secure or insecure connection
+// secure returns the dial option for whether its a secure or insecure connection.
 func (g *grpcClient) secure(addr string) grpc.DialOption {
 	// first we check if theres'a  tls config
 	if g.opts.Context != nil {
@@ -166,7 +166,7 @@ func (g *grpcClient) call(ctx context.Context, node *registry.Node, req client.R
 		grpcCallOptions := []grpc.CallOption{
 			grpc.ForceCodec(cf),
 			grpc.CallContentSubtype(cf.Name())}
-		if opts := g.getGrpcCallOptions(); opts != nil {
+		if opts := callOpts(opts); opts != nil {
 			grpcCallOptions = append(grpcCallOptions, opts...)
 		}
 		err := cc.Invoke(ctx, methodToGRPC(req.Service(), req.Endpoint()), req.Body(), rsp, grpcCallOptions...)
@@ -246,16 +246,16 @@ func (g *grpcClient) stream(ctx context.Context, node *registry.Node, req client
 		grpc.ForceCodec(wc),
 		grpc.CallContentSubtype(cf.Name()),
 	}
-	if opts := g.getGrpcCallOptions(); opts != nil {
+	if opts := callOpts(opts); opts != nil {
 		grpcCallOptions = append(grpcCallOptions, opts...)
 	}
 
-	// create a new cancelling context
+	// create a new canceling context
 	newCtx, cancel := context.WithCancel(ctx)
 
 	st, err := cc.NewStream(newCtx, desc, methodToGRPC(req.Service(), req.Endpoint()), grpcCallOptions...)
 	if err != nil {
-		// we need to cleanup as we dialled and created a context
+		// we need to cleanup as we dialed and created a context
 		// cancel the context
 		cancel()
 		// close the connection
@@ -665,26 +665,6 @@ func (g *grpcClient) getGrpcDialOptions() []grpc.DialOption {
 	}
 
 	opts, ok := v.([]grpc.DialOption)
-
-	if !ok {
-		return nil
-	}
-
-	return opts
-}
-
-func (g *grpcClient) getGrpcCallOptions() []grpc.CallOption {
-	if g.opts.CallOptions.Context == nil {
-		return nil
-	}
-
-	v := g.opts.CallOptions.Context.Value(grpcCallOptions{})
-
-	if v == nil {
-		return nil
-	}
-
-	opts, ok := v.([]grpc.CallOption)
 
 	if !ok {
 		return nil

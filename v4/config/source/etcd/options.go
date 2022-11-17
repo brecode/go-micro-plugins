@@ -12,13 +12,14 @@ type prefixKey struct{}
 type stripPrefixKey struct{}
 type authKey struct{}
 type dialTimeoutKey struct{}
+type useDefKey struct{}
 
 type authCreds struct {
 	Username string
 	Password string
 }
 
-// WithAddress sets the etcd address
+// WithAddress sets the etcd address.
 func WithAddress(a ...string) source.Option {
 	return func(o *source.Options) {
 		if o.Context == nil {
@@ -28,7 +29,7 @@ func WithAddress(a ...string) source.Option {
 	}
 }
 
-// WithPrefix sets the key prefix to use
+// WithPrefix sets the key prefix to use.
 func WithPrefix(p string) source.Option {
 	return func(o *source.Options) {
 		if o.Context == nil {
@@ -49,7 +50,7 @@ func StripPrefix(strip bool) source.Option {
 	}
 }
 
-// Auth allows you to specify username/password
+// Auth allows you to specify username/password.
 func Auth(username, password string) source.Option {
 	return func(o *source.Options) {
 		if o.Context == nil {
@@ -59,12 +60,23 @@ func Auth(username, password string) source.Option {
 	}
 }
 
-// WithDialTimeout set the time out for dialing to etcd
+// WithDialTimeout set the time out for dialing to etcd.
 func WithDialTimeout(timeout time.Duration) source.Option {
 	return func(o *source.Options) {
 		if o.Context == nil {
 			o.Context = context.Background()
 		}
 		o.Context = context.WithValue(o.Context, dialTimeoutKey{}, timeout)
+	}
+}
+
+// UseDefKey avoid err if no exist keys with prefix
+// put /prefix/default "{}".
+func UseDefKey(flag bool) source.Option {
+	return func(o *source.Options) {
+		if o.Context == nil {
+			o.Context = context.Background()
+		}
+		o.Context = context.WithValue(o.Context, useDefKey{}, flag)
 	}
 }
