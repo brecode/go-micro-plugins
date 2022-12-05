@@ -37,6 +37,10 @@ func init() {
 }
 
 func (q *QLDB) Init(opts ...store.Option) error {
+	for _, o := range opts {
+		o(&q.options)
+	}
+	/// re-configure for options
 	return q.configure()
 }
 

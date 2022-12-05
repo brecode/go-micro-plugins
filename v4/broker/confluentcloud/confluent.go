@@ -2,7 +2,6 @@ package confluentcloud
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"go-micro.dev/v4/broker"
@@ -18,7 +17,8 @@ type Confluent struct {
 	cfg      *kafka.ConfigMap
 	consumer *kafka.Consumer
 	producer *kafka.Producer
-	err      error
+
+	err error
 }
 
 func init() {
@@ -27,7 +27,9 @@ func init() {
 
 // NewBroker creates a new confluent broker.
 func NewBroker(opts ...broker.Option) broker.Broker {
-	options := &broker.Options{}
+	options := &broker.Options{
+		Logger: logger.DefaultLogger,
+	}
 
 	for _, o := range opts {
 		o(options)
@@ -38,15 +40,16 @@ func NewBroker(opts ...broker.Option) broker.Broker {
 		logger.Log(logger.DebugLevel, "kafka config: %v", kafkaCfg)
 		c.cfg = kafkaCfg
 	}
-
-	err := c.setupConfluent()
-	if err != nil {
-		c.err = err
-	}
 	return c
 }
-func (c *Confluent) Init(option ...broker.Option) error {
-	return errors.New("unimplemented; pass options to NewBroker instead")
+
+func (c *Confluent) Init(options ...broker.Option) error {
+	for _, o := range options {
+		o(&c.options)
+	}
+
+	// reconfigure for new options, if any
+	return c.setupConfluent()
 }
 
 func (c *Confluent) setupConfluent() error {
@@ -54,7 +57,6 @@ func (c *Confluent) setupConfluent() error {
 
 	c.consumer, err = kafka.NewConsumer(c.cfg)
 	if err != nil {
-		fmt.Println(err)
 		return err
 	}
 
@@ -80,9 +82,10 @@ func (c *Confluent) Connect() error {
 }
 
 func (c *Confluent) Disconnect() error {
-	c.consumer.Close()
+	err := c.consumer.Close()
 	c.producer.Close()
-	return nil
+
+	return err
 }
 
 func (c *Confluent) Publish(topic string, m *broker.Message, opts ...broker.PublishOption) error {
@@ -116,13 +119,14 @@ func (c *Confluent) Subscribe(topic string, h broker.Handler, opts ...broker.Sub
 	if err != nil {
 		return nil, err
 	}
+
+	//	context should be coming from outside
 	ctx := context.Background()
 
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
-				c.consumer.Close()
 				return
 			default:
 				ev, err := c.consumer.ReadMessage(100 * time.Millisecond)
@@ -131,6 +135,7 @@ func (c *Confluent) Subscribe(topic string, h broker.Handler, opts ...broker.Sub
 					continue
 				}
 
+				// message processing here ...
 				header := make(map[string]string)
 				for _, v := range ev.Headers {
 					header[v.Key] = fmt.Sprintf("%v", v.Value)
@@ -145,12 +150,14 @@ func (c *Confluent) Subscribe(topic string, h broker.Handler, opts ...broker.Sub
 					},
 					topic: *ev.TopicPartition.Topic,
 				}
+
 				err = h(p)
 				if err != nil {
-					// ack to msg bus
-					p.Ack()
+					// 1. retry with exponential backoff
+					// 2. Max retries
 				} else {
-					// return msg to msg bus
+					_, err := c.consumer.Commit()
+					logger.Log(logger.ErrorLevel, "commit error: %v for message with key %s", err, string(ev.Key))
 				}
 			}
 		}
@@ -166,16 +173,3 @@ func (c *Confluent) Subscribe(topic string, h broker.Handler, opts ...broker.Sub
 func (c *Confluent) String() string {
 	return "confluentcloud"
 }
-
-// A single publication received by a handler.
-type publication struct {
-	msg   *broker.Message
-	topic string
-	ack   func()
-	err   error
-}
-
-func (p *publication) Topic() string            { return p.topic }
-func (p *publication) Message() *broker.Message { return p.msg }
-func (p *publication) Ack() error               { p.ack(); return nil }
-func (p *publication) Error() error             { return p.err }

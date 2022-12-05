@@ -86,6 +86,7 @@ use (
 	./v4/store/memory
 	./v4/store/mysql
 	./v4/store/nats-js
+	./v4/store/postgres
 	./v4/store/redis
 	./v4/sync/consul
 	./v4/sync/etcd

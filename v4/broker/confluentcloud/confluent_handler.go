@@ -5,34 +5,24 @@ import (
 	"go-micro.dev/v4/broker"
 )
 
-// pub is a broker.Event
-type pub struct {
-	topic string
+// A single publication received by a handler.
+type publication struct {
 	msg   *broker.Message
+	topic string
+	ack   func()
 	err   error
 }
 
-// consumer is a broker.Subscriber
+func (p *publication) Topic() string            { return p.topic }
+func (p *publication) Message() *broker.Message { return p.msg }
+func (p *publication) Ack() error               { p.ack(); return nil }
+func (p *publication) Error() error             { return p.err }
+
+// consumer is a broker.Subscriber for confluent
 type consumer struct {
 	opts     broker.SubscribeOptions
 	topic    string
 	consumer *kafka.Consumer
-}
-
-func (m *pub) Ack() error {
-	return nil
-}
-
-func (m *pub) Error() error {
-	return m.err
-}
-
-func (m *pub) Topic() string {
-	return m.topic
-}
-
-func (m *pub) Message() *broker.Message {
-	return m.msg
 }
 
 func (m *consumer) Options() broker.SubscribeOptions {
