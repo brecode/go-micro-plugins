@@ -169,7 +169,6 @@ func (s *sqlStore) Close() error {
 }
 
 func (s *sqlStore) Init(opts ...store.Option) error {
-	fmt.Println("In")
 	for _, o := range opts {
 		o(&s.options)
 	}

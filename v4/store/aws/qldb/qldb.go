@@ -24,10 +24,7 @@ type Config struct {
 
 type QLDB struct {
 	options store.Options
-
-	session *qldbsession.Client
 	driver  *qldbdriver.QLDBDriver
-	qldbdriver.QLDBDriver
 
 	cfg *Config
 }
@@ -101,12 +98,11 @@ func (q *QLDB) Write(r *store.Record, opts ...store.WriteOption) error {
 
 		// Check if there are any results, if not write to ledger
 		if result.Next(txn) {
-			return nil, errors.New("document already exists")
+			return nil, errors.New("document already exists") // ignore document
 		} else {
 
 			var t interface{}
 			json.Unmarshal(r.Value, &t)
-
 			if err != nil {
 				return nil, err
 			}
@@ -136,7 +132,9 @@ func (q *QLDB) List(opts ...store.ListOption) ([]string, error) {
 }
 
 func (q *QLDB) Close() error {
-	q.driver.Shutdown(context.TODO())
+	q.options.Logger.Log(logger.InfoLevel, "closing")
+
+	q.driver.Shutdown(q.options.Context)
 	return nil
 }
 
@@ -154,7 +152,6 @@ func NewStore(opts ...store.Option) store.Store {
 
 	// get index key for optimized reads
 	cfg, _ := options.Context.Value(struct{}{}).(*Config)
-	logger.Log(logger.DebugLevel, "QLDB config: %v", cfg)
 
 	// new store
 	s := new(QLDB)
@@ -164,18 +161,16 @@ func NewStore(opts ...store.Option) store.Store {
 
 	// best-effort configure the store
 	if err := s.configure(); err != nil {
-		if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
-			logger.Error("Error configuring store ", err)
-		}
+		s.options.Logger.Log(logger.ErrorLevel, "error: %v", err)
 	}
 
 	// return store
 	return s
 }
 
+// configure instantiates the driver to access QLDB
 func (q *QLDB) configure() error {
 	var err error
-
 	cfg := aws.Config{
 		Region: q.cfg.Region,
 		Credentials: credentials.NewStaticCredentialsProvider(
@@ -184,14 +179,14 @@ func (q *QLDB) configure() error {
 			""),
 	}
 
-	q.session = qldbsession.NewFromConfig(cfg, func(options *qldbsession.Options) {})
+	session := qldbsession.NewFromConfig(cfg, func(options *qldbsession.Options) {})
 
 	if q.driver != nil {
 		q.driver.Shutdown(context.TODO())
 	}
 
 	q.driver, err = qldbdriver.New(q.options.Database,
-		q.session,
+		session,
 		func(options *qldbdriver.DriverOptions) {
 			options.LoggerVerbosity = qldbdriver.LogInfo
 		})

@@ -18,6 +18,7 @@ type Confluent struct {
 	consumer *kafka.Consumer
 	producer *kafka.Producer
 
+	ctx context.Context
 	err error
 }
 
@@ -27,29 +28,31 @@ func init() {
 
 // NewBroker creates a new confluent broker.
 func NewBroker(opts ...broker.Option) broker.Broker {
-	options := &broker.Options{
-		Logger: logger.DefaultLogger,
-	}
+	options := broker.Options{}
 
 	for _, o := range opts {
-		o(options)
+		o(&options)
 	}
 
 	c := new(Confluent)
+	c.options = options
+
 	if kafkaCfg, ok := options.Context.Value(struct{}{}).(*kafka.ConfigMap); ok {
-		logger.Log(logger.DebugLevel, "kafka config: %v", kafkaCfg)
+		c.options.Logger.Log(logger.DebugLevel, "kafka config: %v", kafkaCfg)
 		c.cfg = kafkaCfg
 	}
+	c.ctx = options.Context
+
 	return c
 }
 
 func (c *Confluent) Init(options ...broker.Option) error {
+	c.options.Logger.Log(logger.InfoLevel, "initializing confluent broker")
+
 	for _, o := range options {
 		o(&c.options)
 	}
-
-	// reconfigure for new options, if any
-	return c.setupConfluent()
+	return nil
 }
 
 func (c *Confluent) setupConfluent() error {
@@ -78,14 +81,14 @@ func (c *Confluent) Address() string {
 }
 
 func (c *Confluent) Connect() error {
-	return nil
+	return c.setupConfluent()
 }
 
 func (c *Confluent) Disconnect() error {
-	err := c.consumer.Close()
+	c.consumer.Close()
 	c.producer.Close()
 
-	return err
+	return nil
 }
 
 func (c *Confluent) Publish(topic string, m *broker.Message, opts ...broker.PublishOption) error {
@@ -108,6 +111,7 @@ func (c *Confluent) Publish(topic string, m *broker.Message, opts ...broker.Publ
 	return err
 }
 
+// Subscribe registers a subscription to the given topic against a confluent broker
 func (c *Confluent) Subscribe(topic string, h broker.Handler, opts ...broker.SubscribeOption) (broker.Subscriber, error) {
 
 	var options broker.SubscribeOptions
@@ -120,13 +124,10 @@ func (c *Confluent) Subscribe(topic string, h broker.Handler, opts ...broker.Sub
 		return nil, err
 	}
 
-	//	context should be coming from outside
-	ctx := context.Background()
-
 	go func() {
 		for {
 			select {
-			case <-ctx.Done():
+			case <-c.ctx.Done():
 				return
 			default:
 				ev, err := c.consumer.ReadMessage(100 * time.Millisecond)
