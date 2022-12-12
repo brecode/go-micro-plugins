@@ -18,22 +18,22 @@ func (p *publication) Message() *broker.Message { return p.msg }
 func (p *publication) Ack() error               { p.ack(); return nil }
 func (p *publication) Error() error             { return p.err }
 
-// consumer is a broker.Subscriber for confluent
-type consumer struct {
+// consumerSubscriber is a broker.Subscriber for confluent
+type consumerSubscriber struct {
 	opts     broker.SubscribeOptions
 	topic    string
 	consumer *kafka.Consumer
 }
 
-func (m *consumer) Options() broker.SubscribeOptions {
-	return m.opts
+func (c *consumerSubscriber) Options() broker.SubscribeOptions {
+	return c.opts
 }
 
-func (m *consumer) Topic() string {
-	return m.topic
+func (c *consumerSubscriber) Topic() string {
+	return c.topic
 }
 
-func (m *consumer) Unsubscribe() error {
-	t := m.consumer.Unsubscribe()
+func (c *consumerSubscriber) Unsubscribe() error {
+	t := c.consumer.Unsubscribe()
 	return t
 }

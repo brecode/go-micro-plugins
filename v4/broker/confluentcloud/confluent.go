@@ -3,7 +3,7 @@ package confluentcloud
 import (
 	"context"
 	"fmt"
-	"github.com/confluentinc/confluent-kafka-go/kafka"
+	kafka "github.com/confluentinc/confluent-kafka-go/kafka"
 	"go-micro.dev/v4/broker"
 	"go-micro.dev/v4/logger"
 	"go-micro.dev/v4/util/cmd"
@@ -11,12 +11,14 @@ import (
 	"time"
 )
 
-type Confluent struct {
+type confluent struct {
 	options broker.Options
 
-	cfg      *kafka.ConfigMap
-	consumer *kafka.Consumer
-	producer *kafka.Producer
+	cfg *kafka.ConfigMap
+	cg  consumerGetter
+	cc  clientConsumer
+	pg  producerGetter
+	cp  clientProducer
 
 	ctx context.Context
 	err error
@@ -28,25 +30,35 @@ func init() {
 
 // NewBroker creates a new confluent broker.
 func NewBroker(opts ...broker.Option) broker.Broker {
-	options := broker.Options{}
+	// if no logger set, default to following
+	options := broker.Options{
+		Logger: logger.DefaultLogger,
+	}
 
 	for _, o := range opts {
 		o(&options)
 	}
 
-	c := new(Confluent)
+	c := new(confluent)
 	c.options = options
 
 	if kafkaCfg, ok := options.Context.Value(struct{}{}).(*kafka.ConfigMap); ok {
 		c.options.Logger.Log(logger.DebugLevel, "kafka config: %v", kafkaCfg)
 		c.cfg = kafkaCfg
 	}
+	c.cg = func() (*kafka.Consumer, error) {
+		return kafka.NewConsumer(c.cfg)
+	}
+	c.pg = func() (*kafka.Producer, error) {
+		return kafka.NewProducer(c.cfg)
+	}
+
 	c.ctx = options.Context
 
 	return c
 }
 
-func (c *Confluent) Init(options ...broker.Option) error {
+func (c *confluent) Init(options ...broker.Option) error {
 	c.options.Logger.Log(logger.InfoLevel, "initializing confluent broker")
 
 	for _, o := range options {
@@ -55,43 +67,45 @@ func (c *Confluent) Init(options ...broker.Option) error {
 	return nil
 }
 
-func (c *Confluent) setupConfluent() error {
-	var err error
-
-	c.consumer, err = kafka.NewConsumer(c.cfg)
-	if err != nil {
-		return err
-	}
-
-	c.producer, err = kafka.NewProducer(c.cfg)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (c *Confluent) Options() broker.Options {
+func (c *confluent) Options() broker.Options {
 	return c.options
 }
 
-func (c *Confluent) Address() string {
+func (c *confluent) Address() string {
 	addr, _ := c.cfg.Get("bootstrap.servers", "ConfluentCloud")
 	return addr.(string)
 }
 
-func (c *Confluent) Connect() error {
-	return c.setupConfluent()
-}
+func (c *confluent) Connect() error {
+	var err error
 
-func (c *Confluent) Disconnect() error {
-	c.consumer.Close()
-	c.producer.Close()
+	cc, err := NewConsumer(c.cg).getFunc()
+	if err != nil {
+		return err
+	}
+
+	c.cc = &confluentConsumer{
+		conn: cc,
+	}
+
+	cp, err := NewProducer(c.pg).getFunc()
+	if err != nil {
+		return err
+	}
+
+	c.cp = &confluentProducer{
+		conn: cp,
+	}
 
 	return nil
 }
 
-func (c *Confluent) Publish(topic string, m *broker.Message, opts ...broker.PublishOption) error {
+func (c *confluent) Disconnect() error {
+	c.cp.close()
+	return c.cc.close()
+}
+
+func (c *confluent) Publish(topic string, m *broker.Message, opts ...broker.PublishOption) error {
 
 	var options broker.PublishOptions
 	for _, o := range opts {
@@ -107,19 +121,19 @@ func (c *Confluent) Publish(topic string, m *broker.Message, opts ...broker.Publ
 		Value: m.Body,
 	}
 
-	err := c.producer.Produce(msg, nil)
+	err := c.cp.produce(msg, nil)
 	return err
 }
 
 // Subscribe registers a subscription to the given topic against a confluent broker
-func (c *Confluent) Subscribe(topic string, h broker.Handler, opts ...broker.SubscribeOption) (broker.Subscriber, error) {
+func (c *confluent) Subscribe(topic string, h broker.Handler, opts ...broker.SubscribeOption) (broker.Subscriber, error) {
 
 	var options broker.SubscribeOptions
 	for _, o := range opts {
 		o(&options)
 	}
 
-	err := c.consumer.SubscribeTopics([]string{topic}, nil)
+	err := c.cc.subscribeTopics([]string{topic}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +144,7 @@ func (c *Confluent) Subscribe(topic string, h broker.Handler, opts ...broker.Sub
 			case <-c.ctx.Done():
 				return
 			default:
-				ev, err := c.consumer.ReadMessage(100 * time.Millisecond)
+				ev, err := c.cc.readMessage(100 * time.Millisecond)
 				if err != nil {
 					logger.Log(logger.ErrorLevel, err)
 					continue
@@ -157,20 +171,20 @@ func (c *Confluent) Subscribe(topic string, h broker.Handler, opts ...broker.Sub
 					// 1. retry with exponential backoff
 					// 2. Max retries
 				} else {
-					_, err := c.consumer.Commit()
+					_, err := c.cc.commit()
 					logger.Log(logger.ErrorLevel, "commit error: %v for message with key %s", err, string(ev.Key))
 				}
 			}
 		}
 	}()
 
-	return &consumer{
+	return &consumerSubscriber{
 		opts:     options,
 		topic:    topic,
-		consumer: c.consumer,
+		consumer: c.cc.connection(),
 	}, nil
 }
 
-func (c *Confluent) String() string {
+func (c *confluent) String() string {
 	return "confluentcloud"
 }
