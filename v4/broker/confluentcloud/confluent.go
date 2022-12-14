@@ -58,12 +58,18 @@ func NewBroker(opts ...broker.Option) broker.Broker {
 	return c
 }
 
-func (c *confluent) Init(options ...broker.Option) error {
+func (c *confluent) Init(opts ...broker.Option) error {
 	c.options.Logger.Log(logger.InfoLevel, "initializing confluent broker")
 
-	for _, o := range options {
+	for _, o := range opts {
 		o(&c.options)
 	}
+
+	if kafkaCfg, ok := c.options.Context.Value(struct{}{}).(*kafka.ConfigMap); ok {
+		c.options.Logger.Log(logger.DebugLevel, "kafka config: %v", kafkaCfg)
+		c.cfg = kafkaCfg
+	}
+
 	return nil
 }
 
@@ -72,7 +78,10 @@ func (c *confluent) Options() broker.Options {
 }
 
 func (c *confluent) Address() string {
-	addr, _ := c.cfg.Get("bootstrap.servers", "ConfluentCloud")
+	addr, _ := c.cfg.Get("bootstrap.servers", "empty")
+	if addr == "empty" {
+		c.options.Logger.Log(logger.ErrorLevel, "empty address for broker server")
+	}
 	return addr.(string)
 }
 

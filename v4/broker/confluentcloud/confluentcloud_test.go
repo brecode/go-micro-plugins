@@ -3,6 +3,7 @@ package confluentcloud
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"github.com/go-micro/plugins/v4/logger/logrus"
 	"github.com/stretchr/testify/assert"
@@ -30,25 +31,24 @@ func (p *mockConfluentProducer) close() {
 	p.Called()
 }
 
-func TestNewBroker(t *testing.T) {
+func buildBroker() broker.Broker {
 	cfg := &kafka.ConfigMap{}
 	ctx := context.Background()
 
 	b := NewBroker(func(options *broker.Options) {
 		options.Context = context.WithValue(ctx, struct{}{}, cfg)
 	})
+	return b
+}
+
+func TestNewBroker(t *testing.T) {
+	b := buildBroker()
 
 	assert.NotNil(t, b)
 }
 
 func TestInitBroker(t *testing.T) {
-	cfg := &kafka.ConfigMap{}
-	ctx := context.Background()
-
-	b := NewBroker(func(options *broker.Options) {
-		options.Context = context.WithValue(ctx, struct{}{}, cfg)
-	})
-
+	b := buildBroker()
 	// set some new options i.e., new logger
 	tLogger := logrus.NewLogger(func(o *logger.Options) {
 		o.Level = logger.DebugLevel
@@ -59,6 +59,23 @@ func TestInitBroker(t *testing.T) {
 	})
 
 	assert.Nil(t, err)
+}
+
+func TestAddress(t *testing.T) {
+	// test empty address
+	b := buildBroker()
+	assert.Equal(t, "empty", b.Address())
+
+	sAddress := fmt.Sprintf("%s", "test.example.com:8080")
+	cfg := &kafka.ConfigMap{
+		"bootstrap.servers": sAddress,
+	}
+	err := b.Init(func(options *broker.Options) {
+		options.Context = context.WithValue(b.Options().Context, struct{}{}, cfg)
+	})
+
+	assert.Nil(t, err)
+	assert.Equal(t, sAddress, b.Address())
 }
 
 func TestConnect(t *testing.T) {
@@ -75,6 +92,23 @@ func TestConnect(t *testing.T) {
 	}
 	err := c.Connect()
 	assert.Nil(t, err)
+}
+
+func TestOptions(t *testing.T) {
+	b := buildBroker()
+
+	o := b.Options()
+	assert.NotNil(t, o)
+
+}
+
+func TestString(t *testing.T) {
+	b := buildBroker()
+
+	s := b.String()
+	expectedString := "confluentcloud"
+	assert.Equal(t, expectedString, s)
+
 }
 
 func TestPublish(t *testing.T) {
