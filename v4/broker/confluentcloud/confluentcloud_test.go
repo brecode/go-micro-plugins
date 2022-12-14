@@ -5,31 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/go-micro/plugins/v4/broker/confluentcloud/mocks"
 	"github.com/go-micro/plugins/v4/logger/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"go-micro.dev/v4/broker"
 	"go-micro.dev/v4/logger"
+	"math/rand"
 	"testing"
 )
 
-type mockConfluentProducer struct {
-	mock.Mock
-}
-
-func (p *mockConfluentProducer) produce(msg *kafka.Message, deliveryChan chan kafka.Event) error {
-	args := p.Called(msg, deliveryChan)
-	return args.Error(0)
-}
-
-func (p *mockConfluentProducer) connection() *kafka.Producer {
-	args := p.Called()
-	return args.Get(0).(*kafka.Producer)
-}
-
-func (p *mockConfluentProducer) close() {
-	p.Called()
-}
+var errMock = errors.New("mock")
 
 func buildBroker() broker.Broker {
 	cfg := &kafka.ConfigMap{}
@@ -122,13 +108,44 @@ func TestPublish(t *testing.T) {
 	}
 
 	b := new(confluent)
-	mockConfluentProducer := &mockConfluentProducer{}
-	mockConfluentProducer.On("produce", mock.Anything, mock.Anything, mock.Anything).Return(errMock)
-
+	mockConfluentProducer := mocks.NewClientProducer(t)
+	mockConfluentProducer.On("Produce", mock.Anything, mock.Anything, mock.Anything).Return(errMock)
 	b.cp = mockConfluentProducer
 	err := b.Publish(topic, m)
 
 	assert.Equal(t, err, errMock)
 }
 
-var errMock = errors.New("mock")
+func TestSubscribe(t *testing.T) {
+	topic := "test-topic"
+	body := make([]byte, 10)
+	rand.Read(body)
+	m := &kafka.Message{
+		Headers: []kafka.Header{
+			{
+				Key:   "partition",
+				Value: []byte{0},
+			},
+		},
+		Value: body,
+		TopicPartition: kafka.TopicPartition{
+			Partition: 0,
+			Topic:     &topic,
+		},
+	}
+
+	b := new(confluent)
+	b.ctx = context.Background()
+	h := func(event broker.Event) error {
+		return nil
+	}
+
+	mockClientConsumer := mocks.NewClientConsumer(t)
+	b.cc = mockClientConsumer
+
+	mockClientConsumer.On("SubscribeTopics", []string{topic}, mock.Anything).Return(nil)
+	mockClientConsumer.On("Connection").Return(&kafka.Consumer{}, nil)
+
+	_, err := b.Subscribe(topic, h)
+	assert.Equal(t, err, nil)
+}
