@@ -21,8 +21,9 @@ type confluent struct {
 	pg producerGetter
 	cg consumerGetter
 
-	ctx context.Context
-	err error
+	ctx       context.Context
+	err       error
+	isTesting bool
 }
 
 func init() {
@@ -52,6 +53,7 @@ func NewBroker(opts ...broker.Option) broker.Broker {
 	c.pg = func() (*kafka.Producer, error) {
 		return kafka.NewProducer(c.cfg)
 	}
+	c.isTesting = false
 
 	c.ctx = options.Context
 
@@ -134,6 +136,11 @@ func (c *confluent) Publish(topic string, m *broker.Message, opts ...broker.Publ
 
 // Subscribe registers a subscription to the given topic against a confluent broker
 func (c *confluent) Subscribe(topic string, h broker.Handler, opts ...broker.SubscribeOption) (broker.Subscriber, error) {
+	defer func() {
+		if c.isTesting {
+			time.Sleep(time.Millisecond * 10)
+		}
+	}()
 
 	var options broker.SubscribeOptions
 	for _, o := range opts {
@@ -176,9 +183,12 @@ func (c *confluent) Subscribe(topic string, h broker.Handler, opts ...broker.Sub
 				err = h(p)
 				if err != nil {
 				} else {
-					_, err := c.cc.commit()
-					logger.Log(logger.ErrorLevel, "commit error: %v for message with key %s", err, string(ev.Key))
+					_, err := c.cc.Commit()
+					if err != nil {
+						logger.Log(logger.ErrorLevel, "commit error: %v for message with key %s", err, string(ev.Key))
+					}
 				}
+
 			}
 		}
 	}()

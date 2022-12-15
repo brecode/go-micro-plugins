@@ -13,6 +13,7 @@ import (
 	"go-micro.dev/v4/logger"
 	"math/rand"
 	"testing"
+	"time"
 )
 
 var errMock = errors.New("mock")
@@ -139,12 +140,15 @@ func TestSubscribe(t *testing.T) {
 	h := func(event broker.Event) error {
 		return nil
 	}
+	b.isTesting = true
 
 	mockClientConsumer := mocks.NewClientConsumer(t)
 	b.cc = mockClientConsumer
 
 	mockClientConsumer.On("SubscribeTopics", []string{topic}, mock.Anything).Return(nil)
 	mockClientConsumer.On("Connection").Return(&kafka.Consumer{}, nil)
+	mockClientConsumer.On("ReadMessage", time.Millisecond*100).Return(m, nil)
+	mockClientConsumer.On("Commit").Return(nil, nil)
 
 	_, err := b.Subscribe(topic, h)
 	assert.Equal(t, err, nil)
