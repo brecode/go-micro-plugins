@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"go-micro.dev/v4/logger"
 	"net"
 
 	"go-micro.dev/v4/broker"
@@ -45,6 +46,10 @@ func newOptions(opt ...server.Option) server.Options {
 
 	if len(opts.Version) == 0 {
 		opts.Version = server.DefaultVersion
+	}
+
+	if opts.Logger == nil {
+		opts.Logger = logger.DefaultLogger
 	}
 
 	return opts

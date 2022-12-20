@@ -27,6 +27,7 @@ type QLDB struct {
 	driver  *qldbdriver.QLDBDriver
 
 	cfg *Config
+	ctx context.Context
 }
 
 func init() {
@@ -37,8 +38,13 @@ func (q *QLDB) Init(opts ...store.Option) error {
 	for _, o := range opts {
 		o(&q.options)
 	}
-	/// re-configure for options
-	return q.configure()
+
+	// best-effort configure the store
+	if err := q.configure(); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (q *QLDB) Options() store.Options {
@@ -55,7 +61,7 @@ func (q *QLDB) Read(key string, opts ...store.ReadOption) ([]*store.Record, erro
 	}
 
 	st := fmt.Sprintf("SELECT * FROM %s WHERE %s = ?", q.options.Table, key)
-	r, err := q.driver.Execute(context.Background(), func(txn qldbdriver.Transaction) (interface{}, error) {
+	r, err := q.driver.Execute(q.ctx, func(txn qldbdriver.Transaction) (interface{}, error) {
 		result, err := txn.Execute(st, key)
 		if err != nil {
 			return nil, err
@@ -85,7 +91,7 @@ func (q *QLDB) Read(key string, opts ...store.ReadOption) ([]*store.Record, erro
 func (q *QLDB) Write(r *store.Record, opts ...store.WriteOption) error {
 
 	// statements for transactions
-	stmt := fmt.Sprintf("INSERT INTO %s ?", q.options.Table)
+	st := fmt.Sprintf("INSERT INTO %s ?", q.options.Table)
 	idempotentStmt := fmt.Sprintf("SELECT * FROM %s WHERE %s = ?", q.options.Table, r.Key)
 
 	_, err := q.driver.Execute(context.Background(), func(txn qldbdriver.Transaction) (interface{}, error) {
@@ -107,7 +113,7 @@ func (q *QLDB) Write(r *store.Record, opts ...store.WriteOption) error {
 				return nil, err
 			}
 
-			_, err = txn.Execute(stmt, t)
+			_, err = txn.Execute(st, t)
 			if err != nil {
 				return nil, err
 			}
@@ -121,13 +127,12 @@ func (q *QLDB) Write(r *store.Record, opts ...store.WriteOption) error {
 }
 
 func (q *QLDB) Delete(key string, opts ...store.DeleteOption) error {
+	q.options.Logger.Log(logger.WarnLevel, "delete not allowed")
 	return nil
 }
 
 func (q *QLDB) List(opts ...store.ListOption) ([]string, error) {
-	if logger.V(logger.DebugLevel, logger.DefaultLogger) {
-		logger.Info("Not implemented yet")
-	}
+	q.options.Logger.Log(logger.InfoLevel, "list not implemented")
 	return nil, nil
 }
 
@@ -158,11 +163,7 @@ func NewStore(opts ...store.Option) store.Store {
 	// set the options
 	s.options = *options
 	s.cfg = cfg
-
-	// best-effort configure the store
-	if err := s.configure(); err != nil {
-		s.options.Logger.Log(logger.ErrorLevel, "error: %v", err)
-	}
+	s.ctx = options.Context
 
 	// return store
 	return s
@@ -171,6 +172,13 @@ func NewStore(opts ...store.Option) store.Store {
 // configure instantiates the driver to access QLDB
 func (q *QLDB) configure() error {
 	var err error
+
+	// cleanup driver
+	if q.driver != nil {
+		q.driver.Shutdown(context.TODO())
+	}
+
+	// role based access / iam
 	cfg := aws.Config{
 		Region: q.cfg.Region,
 		Credentials: credentials.NewStaticCredentialsProvider(
@@ -181,15 +189,12 @@ func (q *QLDB) configure() error {
 
 	session := qldbsession.NewFromConfig(cfg, func(options *qldbsession.Options) {})
 
-	if q.driver != nil {
-		q.driver.Shutdown(context.TODO())
-	}
-
 	q.driver, err = qldbdriver.New(q.options.Database,
 		session,
 		func(options *qldbdriver.DriverOptions) {
 			options.LoggerVerbosity = qldbdriver.LogInfo
 		})
+	_, err = q.driver.GetTableNames(q.ctx)
 
 	return err
 }

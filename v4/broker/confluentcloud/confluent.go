@@ -3,7 +3,7 @@ package confluentcloud
 import (
 	"context"
 	"fmt"
-	kafka "github.com/confluentinc/confluent-kafka-go/kafka"
+	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"go-micro.dev/v4/broker"
 	"go-micro.dev/v4/logger"
 	"go-micro.dev/v4/util/cmd"
@@ -43,7 +43,6 @@ func NewBroker(opts ...broker.Option) broker.Broker {
 	c.options = options
 
 	if kafkaCfg, ok := options.Context.Value(struct{}{}).(*kafka.ConfigMap); ok {
-		c.options.Logger.Log(logger.DebugLevel, "kafka config: %v", kafkaCfg)
 		c.cfg = kafkaCfg
 	}
 	c.cg = func() (*kafka.Consumer, error) {
@@ -78,8 +77,8 @@ func (c *confluent) Options() broker.Options {
 }
 
 func (c *confluent) Address() string {
-	addr, _ := c.cfg.Get("bootstrap.servers", "empty")
-	if addr == "empty" {
+	addr, _ := c.cfg.Get("bootstrap.servers", "")
+	if addr == "" {
 		c.options.Logger.Log(logger.ErrorLevel, "empty address for broker server")
 	}
 	return addr.(string)
